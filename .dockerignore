@@ -1,0 +1,40 @@
+# Git / IDE
+.git
+.gitignore
+.idea
+.vscode
+*.md
+!README.md
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+**/.mypy_cache
+
+# 运行时数据（由卷挂载，不打进镜像）
+backend/data/uploads
+backend/data/logs
+backend/data/db/*.db
+backend/data/db/*.sqlite*
+
+# 模型权重（由卷挂载，体积大）
+models/
+
+# 前端
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# 训练 Notebook 输出 / 临时文件
+training/notebooks/models
+training/notebooks/.ipynb_checkpoints
+**/*.log
+**/*.mp4
+**/*.mov
+
+# 环境文件（敏感信息）
+.env
+.env.local

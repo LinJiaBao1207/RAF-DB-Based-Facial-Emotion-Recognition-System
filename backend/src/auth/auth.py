@@ -99,6 +99,36 @@ def verify_token(token):
     except jwt.InvalidTokenError:
         return None
 
+
+def _user_dict_from_payload(payload):
+    """从 JWT payload 加载用户 dict。"""
+    if not payload or payload.get('type') != 'access':
+        return None
+    user = get_user_by_id(payload['user_id'])
+    if not user or not user.get('is_active'):
+        return None
+    return user
+
+
+def _sync_user_to_db(user_dict, **fields):
+    """将用户字段变更持久化到数据库。"""
+    if not HAVE_DB or not user_dict.get('id'):
+        return
+    u = User.query.get(user_dict['id'])
+    if not u:
+        return
+    for key, value in fields.items():
+        if hasattr(u, key):
+            setattr(u, key, value)
+    db.session.commit()
+
+
+def _sync_user_to_memory(user_dict, **fields):
+    """同步内存 USERS_DB（兼容旧逻辑）。"""
+    username = user_dict.get('username')
+    if username and username in USERS_DB:
+        USERS_DB[username].update(fields)
+
 def get_user_by_id(user_id):
     """根据ID获取用户"""
     # 优先从数据库读取（如果可用）
@@ -178,18 +208,35 @@ def token_required(f):
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
         
-        payload = verify_token(token)
-        if not payload or payload.get('type') != 'access':
+        user = _user_dict_from_payload(verify_token(token))
+        if not user:
             return jsonify({'error': 'Invalid token'}), 401
-        
-        user = get_user_by_id(payload['user_id'])
-        if not user or not user['is_active']:
-            return jsonify({'error': 'User not found or inactive'}), 401
         
         # 将用户信息添加到请求上下文
         request.current_user = user
         return f(*args, **kwargs)
     
+    return decorated
+
+
+def token_required_or_query(f):
+    """GET 资源（如 img）可用 Header 或 ?token= 传递 JWT。"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            parts = request.headers['Authorization'].split(' ', 1)
+            if len(parts) == 2:
+                token = parts[1]
+        if not token:
+            token = request.args.get('token')
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+        user = _user_dict_from_payload(verify_token(token))
+        if not user:
+            return jsonify({'error': 'Invalid token'}), 401
+        request.current_user = user
+        return f(*args, **kwargs)
     return decorated
 
 @auth_bp.route('/register', methods=['POST'])
@@ -418,9 +465,14 @@ def update_profile():
         
         # 允许更新的字段
         updatable_fields = ['email', 'avatar']
+        updates = {}
         for field in updatable_fields:
             if field in data:
                 user[field] = data[field]
+                updates[field] = data[field]
+        if updates:
+            _sync_user_to_db(user, **updates)
+            _sync_user_to_memory(user, **updates)
         
         return jsonify({
             'message': 'Profile updated successfully',
@@ -461,7 +513,10 @@ def change_password():
             return jsonify({'error': 'New password must be at least 6 characters long'}), 400
         
         # 更新密码
-        user['password_hash'] = hash_password(new_password)
+        new_hash = hash_password(new_password)
+        user['password_hash'] = new_hash
+        _sync_user_to_db(user, password_hash=new_hash)
+        _sync_user_to_memory(user, password_hash=new_hash)
         
         return jsonify({'message': 'Password changed successfully'}), 200
         
@@ -577,8 +632,10 @@ def delete_account():
         if not verify_password(password, user['password_hash']):
             return jsonify({'error': 'Invalid password'}), 400
         
-        # 删除用户（这里只是标记为不活跃）
+        # 删除用户（标记为不活跃）
         user['is_active'] = False
+        _sync_user_to_db(user, is_active=False)
+        _sync_user_to_memory(user, is_active=False)
         
         return jsonify({'message': 'Account deleted successfully'}), 200
         

@@ -52,7 +52,7 @@ MODEL_PATHS = {name: str(cfg['path']) for name, cfg in MODEL_CONFIG.items()}
 # 服务器配置
 HOST = '0.0.0.0'
 PORT = 5000
-DEBUG = True
+DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
 
 # 上传配置
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}

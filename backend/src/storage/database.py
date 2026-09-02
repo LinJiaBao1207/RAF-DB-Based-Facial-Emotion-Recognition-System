@@ -1,12 +1,27 @@
 """
-数据库模块 (可选)
-如果需要保存识别历史,可以使用此模块
+数据库模块 — SQLite 默认在首次启动时自动建表并写入演示账号
 """
 
-from flask_sqlalchemy import SQLAlchemy
+import logging
 from datetime import datetime
 
+from flask_sqlalchemy import SQLAlchemy
+
+logger = logging.getLogger(__name__)
+
 db = SQLAlchemy()
+
+# 与 db.create_all() 对应的业务表（不含 sqlite 系统表）
+EXPECTED_TABLES = (
+    'prediction_history',
+    'user_sessions',
+    'users',
+    'user_emotion_summary',
+    'health_assessment',
+    'video_analysis_result',
+    'emotion_journal',
+    'gratitude_record',
+)
 
 class PredictionHistory(db.Model):
     """预测历史表 - 轻量级，只存储元数据和文件路径"""
@@ -303,21 +318,102 @@ class GratitudeRecord(db.Model):
         }
 
 def init_db(app):
-    """初始化数据库"""
+    """初始化数据库：建表、轻量 schema 升级、写入演示账号（若不存在）。"""
     db.init_app(app)
     with app.app_context():
         db.create_all()
-        # 轻量升级：如果 prediction_history 缺少 username 列，动态添加
         try:
-            _upgrade_prediction_history_add_username_if_needed()
+            _upgrade_sqlite_schema()
         except Exception as e:
-            print('检查/升级 prediction_history.username 失败:', e)
-        print("数据库表创建/检查完成!")
+            logger.warning('SQLite schema 升级检查失败: %s', e)
+        try:
+            _seed_default_users()
+        except Exception as e:
+            logger.warning('写入演示账号失败: %s', e)
+
+        tables = _list_sqlite_tables()
+        missing = [t for t in EXPECTED_TABLES if t not in tables]
+        if missing:
+            logger.warning('数据库缺少表: %s', missing)
+        else:
+            logger.info('数据库就绪 (%d 张表): %s', len(tables), ', '.join(tables))
+
+
+def _list_sqlite_tables():
+    engine = db.engine
+    if engine.dialect.name != 'sqlite':
+        return []
+    with engine.connect() as conn:
+        rows = conn.execute(db.text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ))
+        return [row[0] for row in rows]
+
+
+def _upgrade_sqlite_schema():
+    """对旧版 SQLite 库补列；全新克隆走 create_all 时通常无操作。"""
+    _upgrade_prediction_history_add_username_if_needed()
+    _upgrade_table_columns('user_emotion_summary', {
+        'emotion_counts': 'TEXT',
+        'dominant_emotion_count': 'INTEGER DEFAULT 0',
+    })
+    _upgrade_table_columns('health_assessment', {
+        'health_score': 'INTEGER',
+        'risk_level': 'VARCHAR(20)',
+        'risk_level_cn': 'VARCHAR(20)',
+        'emotion_stability': 'FLOAT',
+        'based_on_days': 'INTEGER DEFAULT 1',
+    })
+
+
+def _upgrade_table_columns(table_name, new_columns):
+    engine = db.engine
+    if engine.dialect.name != 'sqlite':
+        return
+
+    with engine.begin() as conn:
+        rows = conn.execute(db.text(f"PRAGMA table_info('{table_name}')"))
+        cols = rows.fetchall()
+        if not cols:
+            return
+        existing = {c[1] for c in cols}
+        for col_name, col_type in new_columns.items():
+            if col_name in existing:
+                continue
+            conn.execute(db.text(
+                f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
+            ))
+            logger.info('已为 %s 增加列 %s', table_name, col_name)
+
+
+def _seed_default_users():
+    """将 auth 模块中的演示账号同步到 users 表（仅当不存在时）。"""
+    from src.auth.auth import USERS_DB
+
+    added = 0
+    for u in USERS_DB.values():
+        exists = User.query.filter_by(username=u['username']).first()
+        if exists:
+            continue
+        db.session.add(User(
+            id=u.get('id'),
+            username=u['username'],
+            email=u.get('email') or f"{u['username']}@local",
+            password_hash=u.get('password_hash', ''),
+            role=u.get('role', 'user'),
+            avatar=u.get('avatar', ''),
+            is_active=u.get('is_active', True),
+            is_verified=u.get('is_verified', False),
+        ))
+        added += 1
+    if added:
+        db.session.commit()
+        logger.info('已写入 %d 个演示账号 (admin / test)', added)
 
 
 def _upgrade_prediction_history_add_username_if_needed():
     """如果是 SQLite，检查并添加新列（最小改动）。"""
-    engine = db.get_engine()
+    engine = db.engine
     if engine.dialect.name != 'sqlite':
         return
     
@@ -344,9 +440,9 @@ def _upgrade_prediction_history_add_username_if_needed():
             if col_name not in existing:
                 try:
                     conn.execute(db.text(f"ALTER TABLE prediction_history ADD COLUMN {col_name} {col_type}"))
-                    print(f"✅ 已为 prediction_history 增加列 {col_name}")
+                    logger.info('已为 prediction_history 增加列 %s', col_name)
                 except Exception as e:
-                    print(f"❌ 添加列 {col_name} 失败: {e}")
+                    logger.warning('添加列 %s 失败: %s', col_name, e)
 
 # 如果要在app.py中使用数据库,添加以下代码:
 """

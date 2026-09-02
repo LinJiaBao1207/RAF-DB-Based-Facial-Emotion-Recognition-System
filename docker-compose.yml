@@ -1,0 +1,49 @@
+# 人脸情绪识别系统 — Docker Compose 部署
+#
+# 使用前准备:
+#   1. （可选）将模型权重放入 ./models/ — 无权重可预览 UI/登录，识别需训练权重
+#   2. 复制 .env.example 为 .env 并设置 JWT_SECRET_KEY
+#
+# 启动: docker compose up -d --build
+# 访问: http://localhost:8080
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: emotion-backend
+    restart: unless-stopped
+    environment:
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      DATABASE_URL: ${DATABASE_URL:-}
+    volumes:
+      # 模型权重（只读挂载）
+      - ./models:/app/models:ro
+      # 数据库、上传文件、日志持久化
+      - backend-data:/app/backend/data
+    expose:
+      - "5000"
+    networks:
+      - emotion-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: emotion-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - emotion-net
+
+volumes:
+  backend-data:
+
+networks:
+  emotion-net:
+    driver: bridge

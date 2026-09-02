@@ -1400,8 +1400,13 @@ const toUploadApiUrl = (filePath) => {
   if (!path || path.includes('..')) return null
 
   const encoded = path.split('/').map(encodeURIComponent).join('/')
-  // 走 Vite 代理 /api → 后端，避免写死 localhost:5000
-  return `/api/uploads/${encoded}`
+  const base = `/api/uploads/${encoded}`
+  const token = localStorage.getItem('token')
+  if (token) {
+    const sep = base.includes('?') ? '&' : '?'
+    return `${base}${sep}token=${encodeURIComponent(token)}`
+  }
+  return base
 }
 
 // 根据记录生成可用的预览图片地址（支持后端返回的 base64、url、文件路径字段）

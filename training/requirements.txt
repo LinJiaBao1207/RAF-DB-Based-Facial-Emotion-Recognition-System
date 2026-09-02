@@ -1,0 +1,13 @@
+# 训练环境依赖（Python 3.8，与 backend 推理端一致）
+# TensorFlow 版本请与推理端保持一致（建议 2.10.x）
+
+tensorflow>=2.10,<2.16
+numpy>=1.24,<2.0
+matplotlib>=3.7
+h5py>=3.11
+Pillow>=10.0
+scipy>=1.10
+
+# Notebook 运行
+jupyter>=1.0
+ipykernel>=6.0

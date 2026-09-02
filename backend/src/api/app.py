@@ -23,7 +23,7 @@ from src.ml.image_preprocess import (
     enhance_clarity,
 )
 from src.ml.face_quality import assess_face_quality, get_quality_level
-from src.auth import auth_bp, token_required, admin_required, verify_token, get_user_by_id
+from src.auth import auth_bp, token_required, token_required_or_query, admin_required, verify_token, get_user_by_id, hash_password
 from sqlalchemy import text
 from sqlalchemy.orm.attributes import flag_modified
 from src.ml.video_processor import (
@@ -33,6 +33,7 @@ from src.ml.video_processor import (
 )
 from src.config.settings import (
     MODEL_PATHS,
+    MODEL_CONFIG,
     UPLOAD_FOLDER,
     DATABASE_URI,
 )
@@ -88,6 +89,17 @@ def _resolve_upload_file(filename: str) -> Optional[Path]:
     return target
 
 
+def _user_can_access_upload(rel_path: str, current_user: dict) -> bool:
+    """仅允许资源所有者或管理员读取 uploads 下文件。"""
+    if current_user.get('role') == 'admin':
+        return True
+    safe_user = _safe_user_dirname(current_user.get('username'))
+    parts = Path(rel_path.replace('\\', '/')).parts
+    if len(parts) >= 2 and parts[0] in ('predictions', 'video_frames'):
+        return parts[1] == safe_user
+    return False
+
+
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
@@ -110,28 +122,6 @@ from src.storage.database import (
     VideoAnalysisResult, EmotionJournal, GratitudeRecord
 )
 init_db(app)
-
-# 将内存中的用户同步到数据库（如果尚未存在）
-try:
-    from src.auth import USERS_DB
-    with app.app_context():
-        for username, u in USERS_DB.items():
-            exists = User.query.filter_by(username=u['username']).first()
-            if not exists:
-                new = User(
-                    id=u.get('id'),
-                    username=u.get('username'),
-                    email=u.get('email') or f"{u.get('username')}@local",
-                    password_hash=u.get('password_hash', ''),
-                    role=u.get('role', 'user'),
-                    avatar=u.get('avatar', ''),
-                    is_active=u.get('is_active', True),
-                    is_verified=u.get('is_verified', False)
-                )
-                db.session.add(new)
-        db.session.commit()
-except Exception as e:
-    logger.warning(f"同步内存用户到数据库时出错: {e}")
 
 # 注册认证蓝图
 app.register_blueprint(auth_bp)
@@ -406,11 +396,13 @@ def get_models():
     """获取可用的模型列表"""
     model_info = []
     for name, path in MODEL_PATHS.items():
+        cfg = MODEL_CONFIG.get(name, {})
         model_info.append({
             'name': name,
             'display_name': name.upper(),
             'available': os.path.exists(path),
-            'path': path
+            'description': cfg.get('description', ''),
+            'accuracy': cfg.get('accuracy'),
         })
     return jsonify({'models': model_info})
 
@@ -592,6 +584,7 @@ def update_health_tables(username, emotion, emotion_cn, confidence, probabilitie
         db.session.rollback()
 
 @app.route('/api/predict', methods=['POST'])
+@token_required
 def predict_emotion():
     """
     情绪识别接口
@@ -742,16 +735,7 @@ def predict_emotion():
 
         # 尝试将预测记录保存到数据库（轻量级：只存文件路径）
         try:
-            # 尝试从 Authorization 获取用户名（若前端传了 token）
-            username_for_history = None
-            auth_header = request.headers.get('Authorization')
-            if auth_header and ' ' in auth_header:
-                token = auth_header.split(' ')[1]
-                payload = verify_token(token)
-                if payload and payload.get('user_id'):
-                    u = get_user_by_id(payload['user_id'])
-                    if u:
-                        username_for_history = u.get('username')
+            username_for_history = request.current_user.get('username')
             
             # 保存图片文件到服务器（可选：如果需要持久化）
             original_image_path = None
@@ -815,6 +799,7 @@ def predict_emotion():
         return jsonify({'error': f'预测失败: {str(e)}'}), 500
 
 @app.route('/api/batch_predict', methods=['POST'])
+@token_required
 def batch_predict():
     """批量预测接口"""
     try:
@@ -1028,6 +1013,7 @@ def allowed_video_file(filename):
 
 
 @app.route('/api/video/upload', methods=['POST'])
+@token_required
 def upload_video():
     """
     上传视频文件
@@ -1096,6 +1082,7 @@ def upload_video():
 
 
 @app.route('/api/video/analyze', methods=['POST'])
+@token_required
 def analyze_video():
     """
     分析视频中的情绪
@@ -1388,6 +1375,8 @@ def analyze_video():
 
 
 @app.route('/api/video/list', methods=['GET'])
+@token_required
+@admin_required
 def list_videos():
     """获取已上传的视频列表"""
     try:
@@ -1419,6 +1408,8 @@ def list_videos():
 
 
 @app.route('/api/video/delete/<video_id>', methods=['DELETE'])
+@token_required
+@admin_required
 def delete_video(video_id):
     """删除指定的视频文件"""
     try:
@@ -1472,15 +1463,22 @@ def admin_list_users():
 def admin_create_user():
     try:
         data = request.get_json() or {}
-        username = data.get('username')
-        email = data.get('email')
-        password_hash = data.get('password_hash', '')
+        username = (data.get('username') or '').strip()
+        email = (data.get('email') or '').strip()
+        password = data.get('password', '')
         role = data.get('role', 'user')
         if not username or not email:
             return jsonify({'error': 'username and email required'}), 400
-        if User.query.filter((User.username==username)|(User.email==email)).first():
+        if not password or len(password) < 6:
+            return jsonify({'error': 'password must be at least 6 characters'}), 400
+        if User.query.filter((User.username == username) | (User.email == email)).first():
             return jsonify({'error': 'username or email already exists'}), 409
-        u = User(username=username, email=email, password_hash=password_hash, role=role)
+        u = User(
+            username=username,
+            email=email,
+            password_hash=hash_password(password),
+            role=role,
+        )
         db.session.add(u)
         db.session.commit()
         return jsonify({'user': u.to_dict()}), 201
@@ -1653,7 +1651,7 @@ def admin_clear_histories():
         db.session.commit()
 
         # 如果使用 sqlite，重置 sqlite_sequence 中的条目以让 id 从 1 开始
-        engine = db.get_engine()
+        engine = db.engine
         if engine.dialect.name == 'sqlite':
             try:
                 db.session.execute(text("DELETE FROM sqlite_sequence WHERE name='prediction_history'"))
@@ -1893,15 +1891,17 @@ def admin_delete_video_analysis(analysis_id):
 
 # ==================== 静态文件服务 ====================
 @app.route('/api/uploads/<path:filename>')
+@token_required_or_query
 def serve_uploaded_file(filename):
-    """提供上传文件的访问服务（用于管理员查看历史记录图片）"""
+    """提供上传文件的访问服务（需登录；所有者或管理员可读）"""
     try:
         from flask import send_from_directory
         target = _resolve_upload_file(filename)
         if target is None:
             return jsonify({'error': 'File not found'}), 404
-        # send relative to upload root only
         rel = target.relative_to(UPLOAD_ROOT).as_posix()
+        if not _user_can_access_upload(rel, request.current_user):
+            return jsonify({'error': 'Forbidden'}), 403
         return send_from_directory(str(UPLOAD_ROOT), rel)
     except Exception as e:
         logger.error(f"访问文件失败: {e}")

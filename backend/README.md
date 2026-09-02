@@ -21,18 +21,56 @@ backend/
 
 ## 启动
 
+### 环境要求
+
+- **Python 3.8**（本地跑通并验证的版本）
+- **TensorFlow 2.10.x**（需单独安装，见下方命令）
+
 ```cmd
 cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-pip install "tensorflow"
+pip install "tensorflow==2.10.1"
 python main.py
 ```
 
 服务地址：`http://localhost:5000`
 
 也可从仓库根目录执行：`python backend/main.py`。
+
+> **无模型权重时**：服务仍可启动；模型预热会跳过缺失文件，识别 API 不可用，其余接口（登录、管理、健康检查等）正常。详见根目录 [README](../README.md#使用方式一览)。
+
+### 数据库（自动初始化）
+
+克隆仓库后**无需手动建库**。首次启动（或运行初始化脚本）时会自动：
+
+1. 创建 `backend/data/db/` 目录
+2. 生成 SQLite 文件 `emotion_recognition.db`
+3. 创建全部业务表（用户、识别历史、情绪汇总、健康评估等）
+4. 写入演示账号（若不存在）：
+   - `admin` / `admin123`（管理员）
+   - `test` / `test123`（普通用户）
+
+仅初始化数据库、不启动推理服务时：
+
+```cmd
+cd backend\scripts
+python init_database.py
+```
+
+`scripts/migrate_database.py` 等迁移脚本**仅用于从旧版本升级**已有数据库；全新克隆一般不需要运行。
+
+## Docker 部署
+
+仓库根目录提供 `docker-compose.yml`，详见 [README](../README.md#docker-部署推荐用于快速体验)。
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+后端镜像：`backend/Dockerfile`（Python 3.8 + TensorFlow 2.10.1 + Gunicorn）。
 
 ## 安全配置
 

@@ -39,7 +39,8 @@ backend/data/db/*.sqlite*
 log/
 plots/
 weights/
-models/
+models/*
+!models/.gitkeep
 
 # Frontend artifacts
 frontend/node_modules/

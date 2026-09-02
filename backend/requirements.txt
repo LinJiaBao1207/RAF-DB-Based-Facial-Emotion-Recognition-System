@@ -7,7 +7,10 @@ PyJWT==2.8.0
 opencv-python==4.8.1.78
 opencv-contrib-python==4.8.1.78
 
+# 环境：Python 3.8（本地验证版本）
+# 深度学习推理需单独安装，建议与训练端一致：
+# pip install "tensorflow==2.10.1"
+
 # Optional: if database is needed
 # pymysql==1.1.0
-# tensorflow==2.15.0
 

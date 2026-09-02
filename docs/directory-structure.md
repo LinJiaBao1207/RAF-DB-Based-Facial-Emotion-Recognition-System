@@ -9,11 +9,19 @@
 ```text
 基于RAF-DB的人脸情绪识别系统/
 ├── README.md / LICENSE / .gitignore
+├── docker-compose.yml                 # Docker Compose 编排
+├── .env.example                       # Docker 环境变量模板
 ├── docs/                              # 文档与设计稿（非运行时）
 │   ├── directory-structure.md
 │   └── brand/logo-design-source.png   # Logo 设计源图
-├── models/                            # 训练产物（通常 gitignore）
+├── training/                          # 模型训练（Notebook + 说明）
+│   ├── README.md
+│   ├── requirements.txt
+│   └── notebooks/                     # RAF_CNN / RAF_VGG / RAF_SE
+├── models/                            # 推理权重（通常 gitignore）
 ├── backend/
+│   ├── Dockerfile                     # 推理后端镜像
+│   ├── docker-entrypoint.sh           # 模型预热 + Gunicorn 启动
 │   ├── main.py                        # 启动入口
 │   ├── requirements.txt
 │   ├── README.md
@@ -27,6 +35,8 @@
 │   ├── tests/
 │   └── data/                          # 运行时 uploads / logs / db（内容忽略）
 └── frontend/
+    ├── Dockerfile                     # 前端构建 + Nginx
+    ├── nginx.conf                     # 静态资源与 /api 反代
     ├── public/                        # favicon.png、logo.png；演示视频（忽略）
     ├── index.html / package.json / vite.config.js
     └── src/
@@ -48,6 +58,16 @@
 | `docs/brand/` | 设计源文件，不参与前端打包 |
 
 请勿在仓库根目录新建 `assets/` 存放应用图标，以免与前端静态资源职责混淆。
+
+## 训练与推理分工
+
+| 目录 | 职责 |
+|------|------|
+| `training/` | RAF-DB 数据集上的模型训练与导出说明 |
+| `models/` | 训练产出的 `.h5` / SavedModel，供 `backend` 加载推理 |
+| `backend/src/ml/` | 运行时预处理、人脸质量、视频抽帧（不含训练逻辑） |
+
+训练流程详见 [training/README.md](../training/README.md)。
 
 ## 约定
 
